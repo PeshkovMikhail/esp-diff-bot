@@ -49,6 +49,8 @@
 #include "lidar.h"
 #include "imu.h"
 
+#include "esp32_serial_transport.h"
+
 #define I2C_MASTER_FREQ_HZ 100000 /*!< I2C master clock frequency */
 
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){printf("Failed status on line %d: %d. Aborting.\n",__LINE__,(int)temp_rc);vTaskDelete(NULL);}}
@@ -146,13 +148,13 @@ extern "C" {
         rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
         RCCHECK(rcl_init_options_init(&init_options, allocator));
 
-    #ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
-        rmw_init_options_t* rmw_options = rcl_init_options_get_rmw_init_options(&init_options);
+    // #ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
+    //     rmw_init_options_t* rmw_options = rcl_init_options_get_rmw_init_options(&init_options);
 
-        // Static Agent IP and port can be used instead of autodisvery.
-        RCCHECK(rmw_uros_options_set_udp_address(CONFIG_MICRO_ROS_AGENT_IP, CONFIG_MICRO_ROS_AGENT_PORT, rmw_options));
-        //RCCHECK(rmw_uros_discover_agent(rmw_options));
-    #endif
+    //     // Static Agent IP and port can be used instead of autodisvery.
+    //     RCCHECK(rmw_uros_options_set_udp_address(CONFIG_MICRO_ROS_AGENT_IP, CONFIG_MICRO_ROS_AGENT_PORT, rmw_options));
+    //     //RCCHECK(rmw_uros_discover_agent(rmw_options));
+    // #endif
 
         // create init_options
         RCCHECK(rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator));
@@ -177,7 +179,7 @@ extern "C" {
         localtime_r(&now, &timeinfo);
 
         i2c_bus_init();
-        lidar = Lidar(UART_NUM_2, (gpio_num_t)5, &lidar_publisher);
+        lidar = Lidar(UART_NUM_1, (gpio_num_t)5, &lidar_publisher);
         imu = ImuSensor(I2C_NUM_0, (char*)"imu_link", &imu_publisher);
         setup_diff_drive();
 
@@ -273,8 +275,23 @@ extern "C" {
         vTaskDelete(NULL);
     }
 
+    static size_t uart_port = UART_NUM_2;
+
     void app_main(void)
     {
+    #if defined(RMW_UXRCE_TRANSPORT_CUSTOM)
+        rmw_uros_set_custom_transport(
+            true,
+            (void *) &uart_port,
+            esp32_serial_open,
+            esp32_serial_close,
+            esp32_serial_write,
+            esp32_serial_read
+        );
+    #else
+    #error micro-ROS transports misconfigured
+    #endif  // RMW_UXRCE_TRANSPORT_CUSTOM
+
         #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) || defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
             ESP_ERROR_CHECK(uros_network_interface_initialize());
         #endif
