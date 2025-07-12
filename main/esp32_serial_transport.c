@@ -2,6 +2,7 @@
 
 #include <driver/uart.h>
 #include <driver/gpio.h>
+#include "esp_log.h"
 
 #define UART_TXD  (CONFIG_MICROROS_UART_TXD)
 #define UART_RXD  (CONFIG_MICROROS_UART_RXD)
@@ -23,15 +24,18 @@ bool esp32_serial_open(struct uxrCustomTransport * transport){
     };
 
     if (uart_param_config(*uart_port, &uart_config) == ESP_FAIL) {
+        ESP_LOGE("TRANSPORT", "config failed");
         return false;
     }
     if (uart_set_pin(*uart_port, UART_TXD, UART_RXD, UART_RTS, UART_CTS) == ESP_FAIL) {
+        ESP_LOGE("TRANSPORT", "setting pin failed");
         return false;
     }
     if (uart_driver_install(*uart_port, UART_BUFFER_SIZE * 2, 0, 0, NULL, 0) == ESP_FAIL) {
+        ESP_LOGE("TRANSPORT", "driver installation failed");
         return false;
     }
-
+    ESP_LOGI("TRANSPORT", "Installation succeded");
     return true;
 }
 

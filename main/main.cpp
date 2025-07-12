@@ -7,67 +7,60 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 
+#include <string>
 #include <stdio.h>
 #include <sys/time.h>
+#include <limits>
+#include <cmath>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "driver/mcpwm_prelude.h"
 #include "sdkconfig.h"
 #include "esp_log.h"
+#include "esp_netif_sntp.h"
+#include "esp_sntp.h"
 
 
-#include <uros_network_interfaces.h>
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
 #include <std_msgs/msg/int32.h>
 #include <std_msgs/msg/float32.h>
+#include <std_msgs/msg/empty.h>
 #include <sensor_msgs/msg/laser_scan.h>
 #include <sensor_msgs/msg/imu.h>
 #include <geometry_msgs/msg/twist.h>
 #include <nav_msgs/msg/odometry.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
-#include <string>
+
 
 
 #ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
+#include <rmw_microxrcedds_c/config.h>
 #include <rmw_microros/rmw_microros.h>
+#include "esp32_serial_transport.h"
 #endif
 
-#include "esp_netif_sntp.h"
-#include "esp_sntp.h"
 
-
-#include <limits>
-#include <cmath>
 
 #include "GyverPID.h"
 #include "diff_driver.h"
 #include "lidar.h"
 #include "imu.h"
 
-#include "esp32_serial_transport.h"
+
+#include "wifi_connector.h"
+#include "ota_updater.h"
 
 #define I2C_MASTER_FREQ_HZ 100000 /*!< I2C master clock frequency */
 
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){printf("Failed status on line %d: %d. Aborting.\n",__LINE__,(int)temp_rc);vTaskDelete(NULL);}}
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){printf("Failed status on line %d: %d. Continuing.\n",__LINE__,(int)temp_rc);}}
 
-
-
-#define ENCODER_STEP (2*M_PI / 30)
-
-#define ECHO_TEST_TXD (UART_PIN_NO_CHANGE)
-#define ECHO_TEST_RXD (5)
-#define ECHO_TEST_RTS (UART_PIN_NO_CHANGE)
-#define ECHO_TEST_CTS (UART_PIN_NO_CHANGE)
-
-#define ECHO_UART_PORT_NUM      (UART_NUM_2)
-#define ECHO_UART_BAUD_RATE     (115200)
-#define ECHO_TASK_STACK_SIZE    (4096)
+#define ENCODER_STEP (2*M_PI / 20)
 
 #define SERVO_TIMEBASE_RESOLUTION_HZ 1000000  // 1MHz, 1us per tick
 #define SERVO_TIMEBASE_PERIOD        20000    // 20000 ticks, 20ms
@@ -75,13 +68,14 @@
 #define TAG ("UART TEST")
 
 extern "C" {
-    rcl_subscription_t cmd_vel_subscriber;
+    rcl_subscription_t cmd_vel_subscriber, ota_update_subscriber;
     rcl_publisher_t lidar_publisher, imu_publisher, odom_publisher, left_angle_publisher, right_angle_publisher;
     geometry_msgs__msg__Twist twist_msg;
+    std_msgs__msg__Empty empty_msg;
 
     DiffDriver driver;
     Lidar lidar;
-    ImuSensor imu;
+    // ImuSensor imu;
 
     Encoder left_enc, right_enc;
     Motor left_motor, right_motor;
@@ -91,7 +85,7 @@ extern "C" {
         RCLC_UNUSED(last_call_time);
         if (timer != NULL) {
             lidar.loop();
-            imu.loop();
+            // imu.loop();
         }
     }
 
@@ -111,31 +105,35 @@ extern "C" {
         driver.set_speed(linear, angular);
     }
 
-    void i2c_bus_init(void)
-    {
-        i2c_config_t conf;
-        conf.mode = I2C_MODE_MASTER;
-        conf.sda_io_num = (gpio_num_t)21;
-        conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
-        conf.scl_io_num = (gpio_num_t)22;
-        conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
-        conf.master.clk_speed = I2C_MASTER_FREQ_HZ;
-        conf.clk_flags = I2C_SCLK_SRC_FLAG_FOR_NOMAL;
-
-        esp_err_t ret = i2c_param_config(I2C_NUM_0, &conf);
-        ESP_ERROR_CHECK(ret);
-
-        ret = i2c_driver_install(I2C_NUM_0, conf.mode, 0, 0, 0);
-        ESP_ERROR_CHECK(ret);
+    void update_firmware(const void * msgin) {
+        ota_update();
     }
+
+    // void i2c_bus_init(void)
+    // {
+    //     i2c_config_t conf;
+    //     conf.mode = I2C_MODE_MASTER;
+    //     conf.sda_io_num = (gpio_num_t)21;
+    //     conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+    //     conf.scl_io_num = (gpio_num_t)22;
+    //     conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+    //     conf.master.clk_speed = I2C_MASTER_FREQ_HZ;
+    //     conf.clk_flags = I2C_SCLK_SRC_FLAG_FOR_NOMAL;
+
+    //     esp_err_t ret = i2c_param_config(I2C_NUM_0, &conf);
+    //     ESP_ERROR_CHECK(ret);
+
+    //     ret = i2c_driver_install(I2C_NUM_0, conf.mode, 0, 0, 0);
+    //     ESP_ERROR_CHECK(ret);
+    // }
 
     void setup_diff_drive() {
         gpio_install_isr_service(0);
-        left_enc = Encoder((gpio_num_t)13, ENCODER_STEP);
-        right_enc = Encoder((gpio_num_t)14, ENCODER_STEP);
+        left_enc = Encoder((gpio_num_t)17, ENCODER_STEP);
+        right_enc = Encoder((gpio_num_t)16, ENCODER_STEP);
 
-        left_motor = Motor("left_wheel", (gpio_num_t)27, (gpio_num_t)26, &left_enc, &left_angle_publisher);
-        right_motor = Motor("right_wheel", (gpio_num_t)33, (gpio_num_t)25, &right_enc, &right_angle_publisher);
+        left_motor = Motor("left_wheel", (gpio_num_t)21, (gpio_num_t)22, &left_enc, &left_angle_publisher);
+        right_motor = Motor("right_wheel", (gpio_num_t)18, (gpio_num_t)19, &right_enc, &right_angle_publisher);
 
         driver = DiffDriver(&left_motor, &right_motor, 0.036, 0.1115, &odom_publisher);
     }
@@ -145,19 +143,20 @@ extern "C" {
         rcl_allocator_t allocator = rcl_get_default_allocator();
         rclc_support_t support;
 
-        rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
-        RCCHECK(rcl_init_options_init(&init_options, allocator));
+        // rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
+        // RCCHECK(rcl_init_options_init(&init_options, allocator));
 
-    // #ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
-    //     rmw_init_options_t* rmw_options = rcl_init_options_get_rmw_init_options(&init_options);
-
-    //     // Static Agent IP and port can be used instead of autodisvery.
-    //     RCCHECK(rmw_uros_options_set_udp_address(CONFIG_MICRO_ROS_AGENT_IP, CONFIG_MICRO_ROS_AGENT_PORT, rmw_options));
-    //     //RCCHECK(rmw_uros_discover_agent(rmw_options));
-    // #endif
+        // #if defined(CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE) && (defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) || defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET))
+        //     rmw_init_options_t* rmw_options = rcl_init_options_get_rmw_init_options(&init_options);
+        //     // Static Agent IP and port can be used instead of autodisvery.
+        //     RCCHECK(rmw_uros_options_set_udp_address(CONFIG_MICRO_ROS_AGENT_IP, CONFIG_MICRO_ROS_AGENT_PORT, rmw_options));
+        //     //RCCHECK(rmw_uros_discover_agent(rmw_options));
+        // #endif
 
         // create init_options
-        RCCHECK(rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator));
+        rcl_ret_t ret = rclc_support_init(&support, 0, NULL, &allocator);
+        ESP_LOGE("SUPPORT", "%ld", ret);
+        RCCHECK(ret);
 
         
         esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
@@ -178,11 +177,9 @@ extern "C" {
         time(&now);
         localtime_r(&now, &timeinfo);
 
-        i2c_bus_init();
+        // i2c_bus_init();
         lidar = Lidar(UART_NUM_1, (gpio_num_t)5, &lidar_publisher);
-        imu = ImuSensor(I2C_NUM_0, (char*)"imu_link", &imu_publisher);
-        setup_diff_drive();
-
+        // imu = ImuSensor(I2C_NUM_0, (char*)"imu_link", &imu_publisher);
 
         // create node
         rcl_node_t node;
@@ -195,12 +192,12 @@ extern "C" {
             ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, LaserScan),
             "scan"));
 
-        RCCHECK(rclc_publisher_init_default(
-            &imu_publisher,
-            &node,
-            ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
-            "imu"
-        ));
+        // RCCHECK(rclc_publisher_init_default(
+        //     &imu_publisher,
+        //     &node,
+        //     ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
+        //     "imu"
+        // ));
 
         RCCHECK(rclc_publisher_init_default(
             &odom_publisher,
@@ -229,6 +226,19 @@ extern "C" {
             ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
             "cmd_vel"));
 
+        RCCHECK(rclc_subscription_init_default(
+            &cmd_vel_subscriber,
+            &node,
+            ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
+            "cmd_vel"));
+        
+        RCCHECK(rclc_subscription_init_default(
+            &ota_update_subscriber,
+            &node,
+            ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Empty),
+            "update"
+        ))
+
 
         // create timer,
         rcl_timer_t timer = rcl_get_zero_initialized_timer();
@@ -255,9 +265,8 @@ extern "C" {
         RCCHECK(rclc_executor_add_timer(&executor, &timer));
         RCCHECK(rclc_executor_add_timer(&executor, &pid_timer));
         RCCHECK(rclc_executor_add_subscription(&executor, &cmd_vel_subscriber, &twist_msg, &update_velocity, ON_NEW_DATA));
+        RCCHECK(rclc_executor_add_subscription(&executor, &ota_update_subscriber, &empty_msg, &update_firmware, ON_NEW_DATA));
         // RCL_SET_ERROR
-
-        
 
         // Configure a temporary buffer for the incoming data
         
@@ -279,6 +288,14 @@ extern "C" {
 
     void app_main(void)
     {
+        esp_err_t ret = nvs_flash_init();
+        if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+            ESP_ERROR_CHECK(nvs_flash_erase());
+            ret = nvs_flash_init();
+        }
+        ESP_ERROR_CHECK(ret);
+        setup_diff_drive();
+        wifi_init_sta();
     #if defined(RMW_UXRCE_TRANSPORT_CUSTOM)
         rmw_uros_set_custom_transport(
             true,
@@ -295,6 +312,7 @@ extern "C" {
         #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) || defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
             ESP_ERROR_CHECK(uros_network_interface_initialize());
         #endif
+        
         xTaskCreate(&micro_ros_task, "uart_echo_task", CONFIG_MICRO_ROS_APP_STACK*3, NULL, CONFIG_MICRO_ROS_APP_TASK_PRIO, NULL);
     }
 }

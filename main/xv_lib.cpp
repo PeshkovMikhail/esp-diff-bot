@@ -20,9 +20,9 @@ XV::XV() {
   //rpm_setpoint = 0;
   // scan_rpm_setpoint = DEFAULT_SCAN_RPM;  // desired RPM 1.8KHz/5FPS/360 = 1 deg resolution
   scanRpmPID = GyverPID("lidar", 20);
-  scanRpmPID.tuner_.setParameters(NORMAL, 0.6, 0.25, 3000, 10, 500, 100);
+  scanRpmPID.tuner_.setParameters(NORMAL, 0.65, 0.10, 1000, 10, 500, 500);
   scanRpmPID.setpoint = DEFAULT_SCAN_RPM;
-  scanRpmPID.setLimits(0.3, 1);
+  scanRpmPID.setLimits(0.40, 0.9);
 
   ClearVars();
 

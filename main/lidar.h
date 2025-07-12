@@ -59,7 +59,7 @@ public:
 
         mcpwm_gen_handle_t generator_lidar = NULL;
         mcpwm_generator_config_t generator_config = {
-            .gen_gpio_num = 32,
+            .gen_gpio_num = 23,
         };
         ESP_ERROR_CHECK(mcpwm_new_generator(oper_lidar, &generator_config, &generator_lidar));
         
@@ -109,6 +109,7 @@ public:
 
         
         enableMotor(true);
+        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(comparator_lidar, 650));
 
         data = (uint8_t *) malloc(LIDAR_BUF_SIZE);
 
@@ -118,12 +119,13 @@ public:
 
     void loop() {
         int len = uart_read_bytes(port_, data, (LIDAR_BUF_SIZE - 1), 20 / portTICK_PERIOD_MS);
+        // ESP_LOGI(TAG, "bytes read %d", len);
         for(int id = 0; id < len; id++) {
             processByte(data[id]);
         }
         
         if (!XV::loop()) {
-            ESP_LOGI(TAG, "%f",scanRpmPID.input);
+            // ESP_LOGI(TAG, "%f",scanRpmPID.input);
             ESP_LOGE(TAG, "motor error");
         }
     }
@@ -156,6 +158,6 @@ public:
         ESP_LOGI(TAG, "%f %f %d", pwm, scanRpmPID._minOut, motor_enabled);
         int pwm_value = 1000*pwm;
         
-        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(comparator_lidar, pwm_value));
+        // ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(comparator_lidar, pwm_value));
     }
 };

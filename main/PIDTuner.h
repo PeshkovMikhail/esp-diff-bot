@@ -102,7 +102,7 @@ class PIDtuner {
     void compute() {
         if (millis() - tmr >= period) {
             tmr = millis();
-            // ESP_LOGI("PID", "COmpute %f state %d", thisValue, state);
+            ESP_LOGI("PID", "COmpute %f state %d", thisValue, state);
             // перемотка массива и расчёт производной через линеаризацию МНК
             for (uint8_t i = 0; i < BUF_SIZE - 1; i++) buf[i] = buf[i + 1];
             buf[BUF_SIZE - 1] = thisValue;
